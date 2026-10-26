@@ -1,0 +1,175 @@
+name: Build and publish Windows CLI
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Private source branch, tag, or commit to build
+        required: true
+        default: feature/krypto-antidebug
+        type: string
+      release_tag:
+        description: Release tag (for example v1.0.0); blank uses the run number
+        required: false
+        default: ''
+        type: string
+      prerelease:
+        description: Mark the release as a prerelease
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: windows-2022
+    env:
+      SOURCE_REPOSITORY_URL: ${{ secrets.SOURCE_REPOSITORY_URL }}
+      SOURCE_REPOSITORY_TOKEN: ${{ secrets.SOURCE_REPOSITORY_TOKEN }}
+
+    steps:
+      - name: Checkout publishing repository
+        uses: actions/checkout@v4
+
+      - name: Validate and checkout private source
+        shell: pwsh
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+
+          if ([string]::IsNullOrWhiteSpace($env:SOURCE_REPOSITORY_URL)) {
+            throw 'SOURCE_REPOSITORY_URL secret is missing.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SOURCE_REPOSITORY_TOKEN)) {
+            throw 'SOURCE_REPOSITORY_TOKEN secret is missing.'
+          }
+
+          $source = Join-Path $env:GITHUB_WORKSPACE 'source'
+          $header = "AUTHORIZATION: bearer $env:SOURCE_REPOSITORY_TOKEN"
+          git -c "http.extraheader=$header" clone --depth 1 --branch $env:SOURCE_REF $env:SOURCE_REPOSITORY_URL $source
+          if ($LASTEXITCODE -ne 0) {
+            throw "Private source checkout failed with exit code $LASTEXITCODE."
+          }
+
+          # Do not leave the authentication header in any repository config.
+          git -C $source config --local --unset-all http.extraheader 2>$null
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build x64 Free CLI
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'source'
+          $solution = Join-Path $source 'vmprotect.sln'
+          $oldCl = $env:CL
+          try {
+            $env:CL = '/wd4819'
+            & msbuild $solution /t:VMProtectCon /p:Configuration=Free /p:Platform=x64 /p:WholeProgramOptimization=false /p:LinkTimeCodeGeneration=Default /m /nr:false /v:minimal
+            if ($LASTEXITCODE -ne 0) {
+              throw "CLI build failed with exit code $LASTEXITCODE."
+            }
+          }
+          finally {
+            $env:CL = $oldCl
+          }
+
+      - name: Build and run x64 unit tests
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'source'
+          & msbuild (Join-Path $source 'vcproj\unit-tests.vcxproj') /p:Configuration=Debug /p:Platform=x64 /p:SolutionDir="$source\" /m /nr:false /v:minimal
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unit-test build failed with exit code $LASTEXITCODE."
+          }
+
+          $test = Join-Path $source 'bin\64\Debug\unit-tests.exe'
+          if (-not (Test-Path -LiteralPath $test)) {
+            throw "Unit-test binary was not found: $test"
+          }
+          $results = Join-Path $env:GITHUB_WORKSPACE 'unit-test-results.xml'
+          & $test "--gtest_output=xml:$results"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unit tests failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Package CLI and checksum
+        id: package
+        shell: pwsh
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          PRERELEASE_INPUT: ${{ inputs.prerelease }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'source'
+          $cli = Join-Path $source 'bin\64\Free\VMProtectCon.exe'
+          if (-not (Test-Path -LiteralPath $cli)) {
+            throw "Free CLI was not produced: $cli"
+          }
+
+          $tag = $env:RELEASE_TAG_INPUT.Trim()
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            $tag = "v0.0.$env:GITHUB_RUN_NUMBER"
+          }
+          if ($tag -notmatch '^v?[0-9A-Za-z][0-9A-Za-z._-]*$') {
+            throw "Invalid release tag: $tag"
+          }
+          if (-not $tag.StartsWith('v')) {
+            $tag = "v$tag"
+          }
+
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE 'release'
+          New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
+          $zipName = "VMProtectCon-windows-x64-$tag.zip"
+          $zipPath = Join-Path $releaseDir $zipName
+          Copy-Item -LiteralPath $cli -Destination (Join-Path $releaseDir 'VMProtectCon.exe')
+          Compress-Archive -Path (Join-Path $releaseDir 'VMProtectCon.exe') -DestinationPath $zipPath -CompressionLevel Optimal -Force
+
+          $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksumPath = Join-Path $releaseDir 'SHA256SUMS.txt'
+          "$hash  $zipName" | Set-Content -LiteralPath $checksumPath -Encoding ascii
+          $sourceCommit = (git -C $source rev-parse HEAD).Trim()
+          @"
+          ## Build
+
+          - Source ref: $env:SOURCE_REF
+          - Source commit: $sourceCommit
+          - Configuration: `Free|x64`
+          - Unit tests: passed in the workflow
+
+          The ZIP contains only the CLI executable. Verify it with `SHA256SUMS.txt`.
+          "@ | Set-Content -LiteralPath (Join-Path $releaseDir 'RELEASE-NOTES.md') -Encoding utf8
+
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "zip=$zipPath" >> $env:GITHUB_OUTPUT
+          "checksums=$checksumPath" >> $env:GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.package.outputs.tag }}
+          ZIP_PATH: ${{ steps.package.outputs.zip }}
+          CHECKSUM_PATH: ${{ steps.package.outputs.checksums }}
+          PRERELEASE_INPUT: ${{ inputs.prerelease }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $releaseArgs = @('release', 'create', $env:RELEASE_TAG, $env:ZIP_PATH, $env:CHECKSUM_PATH, '--title', "VMProtectCon $env:RELEASE_TAG", '--notes-file', (Join-Path $env:GITHUB_WORKSPACE 'release\RELEASE-NOTES.md'))
+          if ($env:PRERELEASE_INPUT -eq 'true') {
+            $releaseArgs += '--prerelease'
+          }
+          & gh @releaseArgs
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub Release creation failed with exit code $LASTEXITCODE."
+          }

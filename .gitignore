@@ -1,0 +1,9 @@
+# The workflow creates these directories on the runner only.
+source/
+release/
+*.zip
+*.exe
+*.pdb
+*.dll
+*.ini
+*.log
