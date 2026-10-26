@@ -20,7 +20,8 @@ workflow, or organization permissions. Rotate it if it is ever exposed.
 ## Publish a release
 
 1. Open **Actions** and select **Build and publish Windows CLI**.
-2. Choose the source branch, tag, or commit in `source_ref`.
+2. The workflow always builds the latest commit on the private repository's
+   `main` branch.
 3. Optionally provide a release tag. If it is empty, the workflow uses
    `v0.0.<run number>`.
 4. Run the workflow and wait for the unit tests and x64 build to finish.

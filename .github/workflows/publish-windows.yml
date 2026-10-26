@@ -3,11 +3,6 @@ name: Build and publish Windows CLI
 on:
   workflow_dispatch:
     inputs:
-      source_ref:
-        description: Private source branch, tag, or commit to build
-        required: true
-        default: feature/krypto-antidebug
-        type: string
       release_tag:
         description: Release tag (for example v1.0.0); blank uses the run number
         required: false
@@ -36,7 +31,7 @@ jobs:
       - name: Validate and checkout private source
         shell: pwsh
         env:
-          SOURCE_REF: ${{ inputs.source_ref }}
+          SOURCE_REF: main
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
@@ -50,7 +45,7 @@ jobs:
 
           $source = Join-Path $env:GITHUB_WORKSPACE 'source'
           $header = "AUTHORIZATION: bearer $env:SOURCE_REPOSITORY_TOKEN"
-          git -c "http.extraheader=$header" clone --depth 1 --branch $env:SOURCE_REF $env:SOURCE_REPOSITORY_URL $source
+          git -c "http.extraheader=$header" clone --depth 1 --single-branch --branch main $env:SOURCE_REPOSITORY_URL $source
           if ($LASTEXITCODE -ne 0) {
             throw "Private source checkout failed with exit code $LASTEXITCODE."
           }
@@ -106,7 +101,7 @@ jobs:
         shell: pwsh
         env:
           RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
-          SOURCE_REF: ${{ inputs.source_ref }}
+          SOURCE_REF: main
           PRERELEASE_INPUT: ${{ inputs.prerelease }}
         run: |
           Set-StrictMode -Version Latest
