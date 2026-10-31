@@ -1,53 +1,114 @@
-# Windows CLI Releases
+# VMProtectCon Windows CLI
 
-This repository publishes the Windows x64 command-line binary built from the
-private `my-vmp` source repository. Source code, licenses, and build credentials
-are never committed here. Releases are created by the manual GitHub Actions
-workflow in `.github/workflows/publish-windows.yml`.
+VMProtectCon is a Windows x64 command-line protector for PE executables. It
+reads an input executable and writes a protected copy. This repository contains
+the public binary releases; source code and build credentials are kept in a
+separate private repository.
 
-## Configure the repository
+## Download
 
-Add these **Actions secrets** to this public repository:
+Open the [Releases](../../releases) page and download the ZIP for Windows x64.
+Extract `VMProtectCon.exe` to a directory of your choice. No installer is
+required.
 
-| Secret | Required value |
-| --- | --- |
-| `SOURCE_REPOSITORY_URL` | HTTPS clone URL of the private source repository, for example `https://github.com/oldccat66/my-vmp.git` |
-| `SOURCE_REPOSITORY_TOKEN` | Fine-grained GitHub PAT with `Contents: Read` on the private source repository only |
+The release package contains only the CLI executable. It does not install a
+service, driver, debugger, or system-wide component.
 
-The token should belong to a dedicated account or bot and should not have write,
-workflow, or organization permissions. Rotate it if it is ever exposed.
+## Requirements
 
-## Publish a release
+- Windows 10 or Windows 11, 64-bit;
+- a PE executable that you are authorized to modify;
+- a VMProtect project/profile file when project-specific protection options are
+  required.
 
-1. Open **Actions** and select **Build and publish Windows CLI**.
-2. The workflow always builds the latest commit on the private repository's
-   `main` branch.
-3. Optionally provide a release tag. If it is empty, the workflow uses
-   `v0.0.<run number>`.
-4. Run the workflow and wait for the unit tests and x64 build to finish.
+This release is a CLI tool only. It does not include the GUI, SDK, runtime
+development files, or private licensing material.
 
-The release contains:
+## Quick start
 
-- `VMProtectCon-windows-x64-<tag>.zip`, containing the self-contained Free CLI;
-- `SHA256SUMS.txt`, containing the SHA-256 digest of the ZIP.
-
-The workflow is intentionally `workflow_dispatch`-only. A push to this public
-repository cannot automatically read the private source or start a build.
-
-## Local verification
-
-Extract the ZIP on a supported 64-bit Windows system and run:
+Run the CLI from PowerShell or `cmd.exe`:
 
 ```powershell
-VMProtectCon.exe --help
+.\VMProtectCon.exe input.exe protected.exe
 ```
 
-The release workflow builds the `Free|x64` configuration. Professional and
-Ultimate builds require private licensing/runtime material and are not published
-by this repository.
+To apply a project/profile file:
 
-## Security boundary
+```powershell
+.\VMProtectCon.exe input.exe protected.exe -pf .\profile.vmp
+```
 
-The workflow checks out the private repository into a temporary runner directory,
-runs tests, and publishes only the CLI ZIP and its digest. It does not upload the
-source tree, the PAT, license files, PDBs, or intermediate build output.
+Choose an output path different from the input path. Keep an untouched backup
+and test `protected.exe` in a staging environment before deployment.
+
+## Command-line syntax
+
+```text
+VMProtectCon.exe input.exe output.exe [-pf project.vmp] [-sf script.lua]
+                         [-wm watermark] [--compression lzma|zstd] [-we]
+```
+
+| Option | Description |
+| --- | --- |
+| `input.exe` | Input Windows PE executable. |
+| `output.exe` | Destination path for the protected executable. |
+| `-pf FILE` | Load a VMProtect project/profile file. |
+| `-sf FILE` | Load an additional Lua script. |
+| `-wm NAME` | Set the output watermark name. |
+| `--compression lzma` | Use LZMA resource compression; this is the default. |
+| `--compression zstd` | Use the embedded Zstandard resource compressor. |
+| `-we` | Treat warnings as errors. |
+
+If the program is started without the required input and output arguments, it
+prints a usage summary. This CLI does not currently provide a separate `--help`
+switch.
+
+Paths may be absolute or relative to the current working directory. Quote paths
+that contain spaces.
+
+## Compression example
+
+```powershell
+.\VMProtectCon.exe `
+  .\input.exe .\protected.exe `
+  -pf .\profile.vmp `
+  --compression zstd
+```
+
+Compression affects embedded resources only. It does not by itself enable
+anti-debugging, import protection, virtualization, or any other profile option.
+
+## Exit codes and troubleshooting
+
+A zero exit code means that the output file was written successfully. A non-zero
+exit code means that the input/profile could not be opened, compilation failed,
+or the output could not be saved.
+
+When a protected program does not start:
+
+1. Confirm that the original executable starts on the same machine.
+2. Use a minimal profile and add protection options incrementally.
+3. Check that every referenced DLL, script, and profile path is available.
+4. Re-run the CLI from a terminal so warnings and errors remain visible.
+5. Test the protected output on a disposable VM before shipping it.
+
+Do not use a profile intended to bootstrap the internal runtime as a general
+application profile. Keep backups of both the input executable and profile.
+
+## Security and support boundary
+
+Only protect software for which you have permission. The tool modifies PE files;
+it cannot guarantee compatibility with every packer, loader, runtime, driver,
+or endpoint-security product. Anti-debugging and import protection are profile
+features and may have compatibility costs.
+
+Issues should include the release version, Windows version and architecture, the
+exact command with secrets and private paths removed, and the CLI output. Do not
+upload proprietary executables, license files, access tokens, or private profiles
+to a public issue.
+
+## License and notices
+
+Use and redistribution are subject to the license terms provided by the
+publisher. Third-party components retain their respective licenses; see the
+notices included with a release where applicable.
