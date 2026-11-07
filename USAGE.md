@@ -1,0 +1,155 @@
+# Usage
+
+my-vmp is a Windows x64 command-line tool. Run it from PowerShell or `cmd.exe`.
+
+## Quick start
+
+Protect an executable with the default settings:
+
+```powershell
+.\my-vmp.exe input.exe protected.exe
+```
+
+Apply a project configuration:
+
+```powershell
+.\my-vmp.exe input.exe protected.exe -pf .\profile.cfg
+```
+
+Choose an output path different from the input path. Keep an untouched backup
+and test the protected output in a staging environment before deployment.
+
+## Command line
+
+```text
+my-vmp.exe input.exe output.exe [-pf project.cfg] [-sf script.lua]
+           [-lf licensing-parameters] [-bd YYYY-MM-DD] [-wm watermark]
+           [--compression lzma|zstd] [-we]
+```
+
+| Option | Description |
+| --- | --- |
+| `input.exe` | Input Windows PE executable. |
+| `output.exe` | Destination path for the protected executable. |
+| `-pf FILE` | Load a TOML project configuration (`.cfg`). |
+| `-sf FILE` | Replace the embedded script with an external Lua file. |
+| `-lf FILE` | Load licensing parameters. |
+| `-bd YYYY-MM-DD` | Set the build date. |
+| `-wm NAME` | Set the output watermark name. |
+| `--compression lzma` | Use LZMA resource compression; this is the default. |
+| `--compression zstd` | Use the embedded Zstandard resource compressor. |
+| `-we` | Treat warnings as errors. |
+
+Paths may be absolute or relative to the current working directory. Quote paths
+that contain spaces. When the required input and output arguments are missing,
+the program prints a usage summary.
+
+## Configuration
+
+`.cfg` files contain UTF-8 TOML and optional Lua in one file:
+
+```toml
+version = 2
+
+[project]
+input = 'input.exe'
+output = 'protected.exe'
+
+[protection]
+options = 0
+vm_options = 0
+compression = 'lzma'
+
+[files]
+enable = false
+
+[script]
+enable = true
+source =
+'''
+function OnBeforeCompilation()
+    print("compiling")
+end
+'''
+```
+
+The separate-line value after `source =` is supported for this triple-quoted
+field. The standard same-line form `source = '''` also works. Triple-single
+quotes preserve Lua text literally; if the source contains that delimiter, use
+a TOML basic string with escapes. A present script defaults to enabled when
+`enable` is omitted. Set `enable = false` to retain the Lua source without
+compiling or executing it. The `-sf` option replaces the embedded source and
+enables the external script. Configuration parsing never evaluates Lua.
+
+Supported sections and keys:
+
+| Section | Keys |
+| --- | --- |
+| `[project]` | `input`, `output`, `watermark`, `hwid`, `license_data` |
+| `[protection]` | `options`, `vm_options`, `vm_section`, `vm_entry_compatibility_buffer`, `compression`, `check_kernel_debugger`, `compression_mode`, `vm_executor_count` |
+| `[[messages]]` | `id`, `text` |
+| `[[folders]]` | `name`, `parent`, `position` |
+| `[[procedures]]` | `name` or `address`, `architecture`, `mode`, `enable`, `options`, `folder`, `index`, `break_offset`, `ext_offsets` |
+| `[[objects]]` | `type`, `name`, `architecture`, `exclude_packing`, `exclude_memory_protection`, `exclude_import_protection` |
+| `[files]` | `enable` |
+| `[[files.folders]]` | `name`, `parent` |
+| `[[files.items]]` | `name`, `path`, `folder`, `options`, `load_at_start` |
+| `[script]` | `enable`, `source` |
+| `[license_manager]` | `product_code`, `algorithm`, `bits`, `public_exp`, `private_exp`, `modulus`, `activation_server`, `black_list` |
+| `[[license_manager.licenses]]` | `date`, `customer_name`, `customer_email`, `order_ref`, `serial_number`, `blocked`, `comments` |
+
+`version` is a root integer (`2` is current; `1` is also accepted). Boolean
+fields accept only `true` or `false`. Option masks, offsets, and indexes are
+nonnegative 32-bit integers. Quote decimal or hexadecimal addresses that exceed
+the signed 64-bit range. Folder references are zero-based. Procedure `mode` is
+`virtualization`, `mutation`, or `ultra`; object `type` is `segment`, `resource`,
+or `import`. Licensing dates are quoted strings. Use TOML literal strings for
+Windows paths when preserving backslashes matters. Protect only executables you
+are authorized to modify.
+
+For example, select a function with:
+
+```toml
+[[procedures]]
+name = 'EntryPoint'
+mode = 'ultra'
+enable = true
+ext_offsets = [7, 17]
+```
+
+Without `-pf`, sidecar discovery checks `input.exe.cfg`, then `input.cfg`. An
+existing malformed configuration is an error; it never falls back to project
+defaults. A command without a sidecar can still run with project-less defaults.
+
+## Compression
+
+`[protection].compression` selects `lzma` or `zstd`; LZMA is the default. An
+explicit `--compression` option overrides the configuration value.
+
+```powershell
+.\my-vmp.exe `
+  .\input.exe .\protected.exe `
+  -pf .\profile.cfg `
+  --compression zstd
+```
+
+Compression affects embedded resources only. It does not enable anti-debugging,
+import protection, virtualization, or any other profile option.
+
+## Errors and troubleshooting
+
+The program returns a non-zero exit code when it cannot open the input or
+configuration, when compilation fails, or when the output cannot be saved.
+Malformed configuration, unknown keys, duplicate definitions, and invalid
+field types are reported with the configuration filename and line number.
+
+When a protected program does not start:
+
+1. Confirm that the original executable starts on the same machine.
+2. Use a minimal configuration and add protection options incrementally.
+3. Check that every referenced DLL, script, and configuration path is available.
+4. Run the CLI from a terminal so warnings and errors remain visible.
+5. Test the protected output on a disposable VM before shipping it.
+
+Do not use a profile intended to bootstrap the internal runtime as a general
+application profile. Keep backups of both the input executable and profile.
