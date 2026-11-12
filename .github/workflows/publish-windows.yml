@@ -28,10 +28,12 @@ jobs:
       - name: Checkout publishing repository
         uses: actions/checkout@v4
 
-      - name: Validate and checkout private source
+      - name: Validate private source settings
+        id: source
         shell: pwsh
         env:
-          SOURCE_REF: main
+          SOURCE_REPOSITORY_URL: ${{ secrets.SOURCE_REPOSITORY_URL }}
+          SOURCE_REPOSITORY_TOKEN: ${{ secrets.SOURCE_REPOSITORY_TOKEN }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
@@ -43,15 +45,25 @@ jobs:
             throw 'SOURCE_REPOSITORY_TOKEN secret is missing.'
           }
 
-          $source = Join-Path $env:GITHUB_WORKSPACE 'source'
-          $header = "AUTHORIZATION: bearer $env:SOURCE_REPOSITORY_TOKEN"
-          git -c "http.extraheader=$header" clone --depth 1 --single-branch --branch main $env:SOURCE_REPOSITORY_URL $source
-          if ($LASTEXITCODE -ne 0) {
-            throw "Private source checkout failed with exit code $LASTEXITCODE."
+          $repositoryUri = [Uri]$env:SOURCE_REPOSITORY_URL.Trim()
+          if ($repositoryUri.Scheme -ne 'https' -or $repositoryUri.Host -ne 'github.com') {
+            throw 'SOURCE_REPOSITORY_URL must be an https://github.com/owner/repository URL.'
           }
+          $repository = $repositoryUri.AbsolutePath.Trim('/') -replace '\.git$', ''
+          if ($repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+            throw 'SOURCE_REPOSITORY_URL must identify exactly one GitHub repository.'
+          }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "repository=$repository`n", [Text.UTF8Encoding]::new($false))
 
-          # Do not leave the authentication header in any repository config.
-          git -C $source config --local --unset-all http.extraheader 2>$null
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.source.outputs.repository }}
+          ref: main
+          token: ${{ secrets.SOURCE_REPOSITORY_TOKEN }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
