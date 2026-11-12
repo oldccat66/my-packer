@@ -1,4 +1,4 @@
-name: Build and publish Windows CLI
+name: Build and publish my-vmp Windows CLI
 
 on:
   workflow_dispatch:
@@ -56,17 +56,44 @@ jobs:
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Build x64 Free CLI
+      - name: Read source build profile
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $source = Join-Path $env:GITHUB_WORKSPACE 'source'
-          $solution = Join-Path $source 'vmprotect.sln'
+          $profilePath = Join-Path $source 'CI_BUILDTYPE'
+          if (-not (Test-Path -LiteralPath $profilePath -PathType Leaf)) {
+            throw "CI_BUILDTYPE was not found: $profilePath"
+          }
+
+          $buildType = (Get-Content -LiteralPath $profilePath -Raw).Trim().ToLowerInvariant()
+          if ($buildType -notin @('beta', 'dev', 'release')) {
+            throw "CI_BUILDTYPE must be beta, dev, or release; got '$buildType'."
+          }
+
+          $configuration = switch ($buildType) {
+            'beta' { 'Beta' }
+            'dev' { 'Dev' }
+            'release' { 'Release' }
+          }
+          $utf8 = [Text.UTF8Encoding]::new($false)
+          $environment = "BUILD_TYPE=$buildType`nBUILD_CONFIGURATION=$configuration`n"
+          [IO.File]::AppendAllText($env:GITHUB_ENV, $environment, $utf8)
+          Write-Host "BUILD_TYPE=$buildType"
+
+      - name: Build x64 CLI
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'source'
+          $solution = Join-Path $source 'my-vmp.sln'
+          $configuration = $env:BUILD_CONFIGURATION
           $oldCl = $env:CL
           try {
             $env:CL = '/wd4819'
-            & msbuild $solution /t:VMProtectCon /p:Configuration=Free /p:Platform=x64 /p:WholeProgramOptimization=false /p:LinkTimeCodeGeneration=Default /m /nr:false /v:minimal
+            & msbuild $solution /t:my-vmp "/p:Configuration=$configuration" /p:Platform=x64 /p:WholeProgramOptimization=false /p:LinkTimeCodeGeneration=Default /m /nr:false /v:minimal
             if ($LASTEXITCODE -ne 0) {
               throw "CLI build failed with exit code $LASTEXITCODE."
             }
@@ -81,12 +108,12 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $source = Join-Path $env:GITHUB_WORKSPACE 'source'
-          & msbuild (Join-Path $source 'vcproj\unit-tests.vcxproj') /p:Configuration=Debug /p:Platform=x64 /p:SolutionDir="$source\" /m /nr:false /v:minimal
+          & msbuild (Join-Path $source 'vcproj\unit-tests.vcxproj') /p:Configuration=Dev /p:Platform=x64 /p:SolutionDir="$source\" /m /nr:false /v:minimal
           if ($LASTEXITCODE -ne 0) {
             throw "Unit-test build failed with exit code $LASTEXITCODE."
           }
 
-          $test = Join-Path $source 'bin\64\Debug\unit-tests.exe'
+          $test = Join-Path $source 'bin\64\Dev\unit-tests.exe'
           if (-not (Test-Path -LiteralPath $test)) {
             throw "Unit-test binary was not found: $test"
           }
@@ -107,9 +134,10 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $source = Join-Path $env:GITHUB_WORKSPACE 'source'
-          $cli = Join-Path $source 'bin\64\Free\VMProtectCon.exe'
+          $configuration = $env:BUILD_CONFIGURATION
+          $cli = Join-Path $source "bin\64\$configuration\my-vmp.exe"
           if (-not (Test-Path -LiteralPath $cli)) {
-            throw "Free CLI was not produced: $cli"
+            throw "CLI for the $configuration profile was not produced: $cli"
           }
 
           $tag = $env:RELEASE_TAG_INPUT.Trim()
@@ -125,10 +153,34 @@ jobs:
 
           $releaseDir = Join-Path $env:GITHUB_WORKSPACE 'release'
           New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
-          $zipName = "VMProtectCon-windows-x64-$tag.zip"
+          $packageDir = Join-Path $releaseDir 'package'
+          New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+          $zipName = "my-vmp-windows-x64-$tag.zip"
           $zipPath = Join-Path $releaseDir $zipName
-          Copy-Item -LiteralPath $cli -Destination (Join-Path $releaseDir 'VMProtectCon.exe')
-          Compress-Archive -Path (Join-Path $releaseDir 'VMProtectCon.exe') -DestinationPath $zipPath -CompressionLevel Optimal -Force
+          Copy-Item -LiteralPath $cli -Destination (Join-Path $packageDir 'my-vmp.exe')
+          [IO.File]::WriteAllText((Join-Path $packageDir 'CI_BUILDTYPE'), $env:BUILD_TYPE, [Text.Encoding]::ASCII)
+          Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zipPath -CompressionLevel Optimal -Force
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [IO.Compression.ZipFile]::OpenRead($zipPath)
+          try {
+            $marker = $archive.GetEntry('CI_BUILDTYPE')
+            if (-not $marker) {
+              throw 'The release ZIP does not contain CI_BUILDTYPE.'
+            }
+            $reader = [IO.StreamReader]::new($marker.Open(), [Text.Encoding]::ASCII)
+            try {
+              if ($reader.ReadToEnd() -cne $env:BUILD_TYPE) {
+                throw 'The release ZIP CI_BUILDTYPE does not match the source profile.'
+              }
+            }
+            finally {
+              $reader.Dispose()
+            }
+          }
+          finally {
+            $archive.Dispose()
+          }
 
           $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
           $checksumPath = Join-Path $releaseDir 'SHA256SUMS.txt'
@@ -139,10 +191,10 @@ jobs:
 
           - Source ref: $env:SOURCE_REF
           - Source commit: $sourceCommit
-          - Configuration: `Free|x64`
+          - Build profile: $configuration|x64
           - Unit tests: passed in the workflow
 
-          The ZIP contains only the CLI executable. Verify it with `SHA256SUMS.txt`.
+          The ZIP contains the CLI executable and `CI_BUILDTYPE`, which records the selected build profile. Verify it with `SHA256SUMS.txt`.
           "@ | Set-Content -LiteralPath (Join-Path $releaseDir 'RELEASE-NOTES.md') -Encoding utf8
 
           "tag=$tag" >> $env:GITHUB_OUTPUT
@@ -160,7 +212,7 @@ jobs:
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
-          $releaseArgs = @('release', 'create', $env:RELEASE_TAG, $env:ZIP_PATH, $env:CHECKSUM_PATH, '--title', "VMProtectCon $env:RELEASE_TAG", '--notes-file', (Join-Path $env:GITHUB_WORKSPACE 'release\RELEASE-NOTES.md'))
+          $releaseArgs = @('release', 'create', $env:RELEASE_TAG, $env:ZIP_PATH, $env:CHECKSUM_PATH, '--title', "my-vmp $env:RELEASE_TAG", '--notes-file', (Join-Path $env:GITHUB_WORKSPACE 'release\RELEASE-NOTES.md'))
           if ($env:PRERELEASE_INPUT -eq 'true') {
             $releaseArgs += '--prerelease'
           }
