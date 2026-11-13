@@ -16,5 +16,5 @@ error handling.
 
 # Something to say
 This is a personal project and maintained by Codex and me,if you have some compatibility issues, just send me the binary or the dmp file.Also IF you can,send me the source code(i think most people wont do this🤔)
-And I also don't know the performance of this tools. yeah this project is too young and so i except bugs and compatibility issues.
+And I also don't know the performance of this tool. yeah this project is too young and so i except bugs and compatibility issues.
 One last thing: if you find this project fun, helpful or whatever, PLEASE STAR THIS REPO BRO PLEASE!😭😭😭
