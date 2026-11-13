@@ -127,9 +127,15 @@ jobs:
             throw "Unit-test binary was not found: $test"
           }
           $results = Join-Path $env:GITHUB_WORKSPACE 'unit-test-results.xml'
-          & $test "--gtest_output=xml:$results"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Unit tests failed with exit code $LASTEXITCODE."
+          Push-Location $source
+          try {
+            & $test "--gtest_output=xml:$results"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Unit tests failed with exit code $LASTEXITCODE."
+            }
+          }
+          finally {
+            Pop-Location
           }
 
       - name: Package CLI and checksum
