@@ -6,10 +6,11 @@ configuration uses TOML `.cfg` files and can include Lua scripts.
 Download the Windows x64 build from [Releases](../../releases).
 
 See [USAGE.md](USAGE.md) for command-line usage, configuration syntax, and
-error handling.
+error handling. See [LUA.md](LUA.md) for Lua syntax, build callbacks, and the
+scripting API.
 
 # Pipeline
-- enhance the file encryption
+- ~~enhance the file encryption~~
 - add modern dotnet support
 - add 32-bit file support
 - custom vm(themida-like)
