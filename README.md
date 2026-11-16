@@ -1,21 +1,29 @@
 # my-vmp
 
-my-vmp is a Windows x64 command-line protector for PE executables. Project
-configuration uses TOML `.cfg` files and can include Lua scripts.
+my-vmp is a Windows x64 command-line protector for supported Windows PE
+executables. It uses TOML-based `.cfg` profiles and supports optional Lua
+build scripts.
 
-Download the Windows x64 build from [Releases](../../releases).
+Download the latest Windows x64 package from [Releases](../../releases). Each
+release includes the CLI, a `CI_BUILDINFO` file describing the build, and a
+SHA-256 checksum file.
 
-See [USAGE.md](USAGE.md) for command-line usage, configuration syntax, and
-error handling. See [LUA.md](LUA.md) for Lua syntax, build callbacks, and the
-scripting API.
+Start with [USAGE.md](USAGE.md) for installation, CLI commands, profile
+configuration, and compatibility notes. See [LUA.md](LUA.md) for Lua syntax,
+callbacks, and the scripting API.
 
-# Pipeline
-- ~~enhance the file encryption~~
-- add modern dotnet support
-- add 32-bit file support
-- custom vm(themida-like)
+## Release Build Information
 
-# Something to say
-This is a personal project and maintained by Codex and me,if you have some compatibility issues, just send me the binary or the dmp file.Also IF you can,send me the source code(i think most people wont do this🤔)
-And I also don't know the performance of this tool. yeah this project is too young and so i except bugs and compatibility issues.
-One last thing: if you find this project fun, helpful or whatever, PLEASE STAR THIS REPO BRO PLEASE!😭😭😭
+The private source repository's root `CI_BUILDINFO` file controls each
+published build:
+
+```text
+TYPE:release
+MSG:Windows x64 CLI build of my-vmp. See USAGE.md for setup and limitations.
+```
+
+`TYPE` must be `release`, `dev`, or `beta`; it selects the corresponding build
+configuration. `MSG` is used verbatim as the GitHub Release description and is
+included in the downloaded package. Keep it on one line. The workflow builds
+from the private repository's latest `main` branch, runs the unit tests, and
+does not generate or attach a full changelog.

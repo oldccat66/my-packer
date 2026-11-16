@@ -71,14 +71,34 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $source = Join-Path $env:GITHUB_WORKSPACE 'source'
-          $profilePath = Join-Path $source 'CI_BUILDTYPE'
+          $profilePath = Join-Path $source 'CI_BUILDINFO'
           if (-not (Test-Path -LiteralPath $profilePath -PathType Leaf)) {
-            throw "CI_BUILDTYPE was not found: $profilePath"
+            throw "CI_BUILDINFO was not found: $profilePath"
           }
 
-          $buildType = (Get-Content -LiteralPath $profilePath -Raw).Trim().ToLowerInvariant()
+          $buildInfo = @{}
+          foreach ($line in Get-Content -LiteralPath $profilePath) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            if ($line -notmatch '^(TYPE|MSG):(.*)$') {
+              throw "Invalid CI_BUILDINFO line: $line"
+            }
+            $key = $Matches[1]
+            if ($buildInfo.ContainsKey($key)) {
+              throw "CI_BUILDINFO contains duplicate $key entries."
+            }
+            $buildInfo[$key] = $Matches[2].Trim()
+          }
+
+          $buildType = $buildInfo['TYPE'].ToLowerInvariant()
           if ($buildType -notin @('beta', 'dev', 'release')) {
-            throw "CI_BUILDTYPE must be beta, dev, or release; got '$buildType'."
+            throw "CI_BUILDINFO TYPE must be beta, dev, or release; got '$buildType'."
+          }
+          $buildMessage = $buildInfo['MSG']
+          if ([string]::IsNullOrWhiteSpace($buildMessage)) {
+            throw 'CI_BUILDINFO MSG must contain a one-line release message.'
+          }
+          if ($buildMessage.Contains("`r") -or $buildMessage.Contains("`n")) {
+            throw 'CI_BUILDINFO MSG must be a single line.'
           }
 
           $configuration = switch ($buildType) {
@@ -89,6 +109,7 @@ jobs:
           $utf8 = [Text.UTF8Encoding]::new($false)
           $environment = "BUILD_TYPE=$buildType`nBUILD_CONFIGURATION=$configuration`n"
           [IO.File]::AppendAllText($env:GITHUB_ENV, $environment, $utf8)
+          "message=$buildMessage" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
           Write-Host "BUILD_TYPE=$buildType"
 
       - name: Build x64 CLI
@@ -145,6 +166,7 @@ jobs:
           RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
           SOURCE_REF: main
           PRERELEASE_INPUT: ${{ inputs.prerelease }}
+          BUILD_MESSAGE: ${{ steps.source.outputs.message }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
@@ -173,20 +195,21 @@ jobs:
           $zipName = "my-vmp-windows-x64-$tag.zip"
           $zipPath = Join-Path $releaseDir $zipName
           Copy-Item -LiteralPath $cli -Destination (Join-Path $packageDir 'my-vmp.exe')
-          [IO.File]::WriteAllText((Join-Path $packageDir 'CI_BUILDTYPE'), $env:BUILD_TYPE, [Text.Encoding]::ASCII)
+          $buildInfo = "TYPE:$env:BUILD_TYPE`nMSG:$env:BUILD_MESSAGE`n"
+          [IO.File]::WriteAllText((Join-Path $packageDir 'CI_BUILDINFO'), $buildInfo, [Text.UTF8Encoding]::new($false))
           Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zipPath -CompressionLevel Optimal -Force
 
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $archive = [IO.Compression.ZipFile]::OpenRead($zipPath)
           try {
-            $marker = $archive.GetEntry('CI_BUILDTYPE')
+            $marker = $archive.GetEntry('CI_BUILDINFO')
             if (-not $marker) {
-              throw 'The release ZIP does not contain CI_BUILDTYPE.'
+              throw 'The release ZIP does not contain CI_BUILDINFO.'
             }
-            $reader = [IO.StreamReader]::new($marker.Open(), [Text.Encoding]::ASCII)
+            $reader = [IO.StreamReader]::new($marker.Open(), [Text.Encoding]::UTF8)
             try {
-              if ($reader.ReadToEnd() -cne $env:BUILD_TYPE) {
-                throw 'The release ZIP CI_BUILDTYPE does not match the source profile.'
+              if ($reader.ReadToEnd() -cne $buildInfo) {
+                throw 'The release ZIP CI_BUILDINFO does not match the source profile.'
               }
             }
             finally {
@@ -201,17 +224,6 @@ jobs:
           $checksumPath = Join-Path $releaseDir 'SHA256SUMS.txt'
           "$hash  $zipName" | Set-Content -LiteralPath $checksumPath -Encoding ascii
           $sourceCommit = (git -C $source rev-parse HEAD).Trim()
-          @"
-          ## Build
-
-          - Source ref: $env:SOURCE_REF
-          - Source commit: $sourceCommit
-          - Build profile: $configuration|x64
-          - Unit tests: passed in the workflow
-
-          The ZIP contains the CLI executable and `CI_BUILDTYPE`, which records the selected build profile. Verify it with `SHA256SUMS.txt`.
-          "@ | Set-Content -LiteralPath (Join-Path $releaseDir 'RELEASE-NOTES.md') -Encoding utf8
-
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "zip=$zipPath" >> $env:GITHUB_OUTPUT
           "checksums=$checksumPath" >> $env:GITHUB_OUTPUT
@@ -223,11 +235,12 @@ jobs:
           RELEASE_TAG: ${{ steps.package.outputs.tag }}
           ZIP_PATH: ${{ steps.package.outputs.zip }}
           CHECKSUM_PATH: ${{ steps.package.outputs.checksums }}
+          RELEASE_MESSAGE: ${{ steps.source.outputs.message }}
           PRERELEASE_INPUT: ${{ inputs.prerelease }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
-          $releaseArgs = @('release', 'create', $env:RELEASE_TAG, $env:ZIP_PATH, $env:CHECKSUM_PATH, '--title', "my-vmp $env:RELEASE_TAG", '--notes-file', (Join-Path $env:GITHUB_WORKSPACE 'release\RELEASE-NOTES.md'))
+          $releaseArgs = @('release', 'create', $env:RELEASE_TAG, $env:ZIP_PATH, $env:CHECKSUM_PATH, '--title', "my-vmp $env:RELEASE_TAG", '--notes', $env:RELEASE_MESSAGE)
           if ($env:PRERELEASE_INPUT -eq 'true') {
             $releaseArgs += '--prerelease'
           }
