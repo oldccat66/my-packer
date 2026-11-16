@@ -17,11 +17,24 @@ Save this as `pack.cfg` beside your executable:
 ```toml
 version = 2
 
+[project]
+input = 'input.exe'
+output = 'protected.exe'
+
 [protection]
-options = 0x100
+pack = true
+anti_debug = false
+anti_vm = false
+import_protection = false
+memory_protection = false
+resource_protection = false
+strip_fixups = false
+strip_debug_info = false
+virtualization = false
+mutation = false
 compression = 'lzma'
-packer_cipher = 'fast'
-packer_cipher_layer2 = false
+use_xor = 'fast'
+use_xor_layer2 = false
 cpu_hash_slots = 32
 vm_entry_compatibility_buffer = 0
 
@@ -29,15 +42,22 @@ vm_entry_compatibility_buffer = 0
 enable = false
 ```
 
-Then pack it:
+Then pack it. The input and output are read from `[project]` when they are
+present, so no positional paths are needed:
 
 ```powershell
-.\my-vmp.exe .\input.exe .\protected.exe -pf .\pack.cfg
+.\my-vmp.exe -pf .\pack.cfg
 if ($LASTEXITCODE -ne 0) { throw 'Protection failed.' }
 ```
 
-`options = 0x100` enables packing. This profile compresses and encrypts the
-packed payload; it does not select application functions for virtualization.
+The same profile can be overridden for a one-off input/output:
+
+```powershell
+.\my-vmp.exe .\input.exe .\protected.exe -pf .\pack.cfg
+```
+
+`pack = true` enables packing. This profile compresses and encrypts the packed
+payload; it does not select application functions for virtualization.
 Choose a different output path, retain the original, and run the protected
 application separately to verify its behavior.
 
@@ -55,32 +75,24 @@ when testing compression or packed-payload encryption.
 Put the input and output paths first, followed by options:
 
 ```text
-my-vmp.exe input.exe output.exe [-pf project.cfg] [-sf script.lua]
-           [-lf licensing-parameters] [-bd YYYY-MM-DD] [-wm watermark]
-           [--compression lzma|zstd] [-we]
-           [--packer-cipher none|fast|balance|secure]
-           [--packer-cipher-layer2|--no-packer-cipher-layer2]
+my-vmp.exe [input.exe output.exe] [-pf project.cfg] [-sf script.lua]
+           [-lf licensing-parameters] [-bd YYYY-MM-DD] [-wm watermark] [-we]
 ```
 
 | Option | Description |
 | --- | --- |
-| `input.exe` | Input Windows PE executable. |
-| `output.exe` | Destination for the protected executable. |
+| `input.exe` | Optional positional input. If omitted, `[project].input` is required. |
+| `output.exe` | Optional positional output. If omitted, `[project].output` or the default is used. |
 | `-pf FILE` | Load a TOML `.cfg` profile. Legacy XML `.vmp` projects remain readable. |
 | `-sf FILE` | Replace the embedded Lua source and enable the external script. |
 | `-lf FILE` | Load licensing parameters. |
 | `-bd YYYY-MM-DD` | Set the build date used by licensing. |
 | `-wm NAME` | Select an existing watermark by name. |
-| `--compression lzma` | Select LZMA; the default compressor. |
-| `--compression zstd` | Select Zstandard for native PE packed regions and resources. |
-| `--packer-cipher none\|fast\|balance\|secure` | Select packed-payload encryption; default: `fast`. Requires packing. |
-| `--packer-cipher-layer2` | Enable the optional second encryption pass; default: off. |
-| `--no-packer-cipher-layer2` | Disable the second pass, including when enabled in the profile. |
 | `-we` | Treat warnings as errors. |
 
-Explicit command-line values override the corresponding profile values;
-omitting an override preserves the profile selection. Lua top-level code runs
-after these overrides and can still change exposed project settings.
+The compression algorithm and XOR profile are intentionally configuration-only;
+they cannot be changed from the CLI. Lua top-level code runs after the profile
+is loaded and can still change exposed project settings.
 
 Command-line paths resolve against the current working directory. Paths stored
 inside a profile resolve against the profile directory. Quote paths containing
@@ -111,11 +123,20 @@ is no XML-to-CFG conversion command.
 
 | Key in `[protection]` | Meaning |
 | --- | --- |
-| `options` | Protection bitmask. Set `0x100` to enable packing. |
+| `pack` | Boolean or `0`/`1`. Compress and protect native packed regions and resources. |
+| `anti_debug` | Boolean or `0`/`1`. Enable user-mode debugger checks. |
+| `anti_vm` | Boolean or `0`/`1`. Enable virtual-machine checks. |
+| `import_protection` | Boolean or `0`/`1`. Protect imports. |
+| `memory_protection` | Boolean or `0`/`1`. Enable runtime memory protection. |
+| `resource_protection` | Boolean or `0`/`1`. Protect resources. |
+| `strip_fixups` | Boolean or `0`/`1`. Strip relocation fixups where supported. |
+| `strip_debug_info` | Boolean or `0`/`1`. Remove debug information where supported. |
+| `virtualization` | `false`/`0` disables it, `"full"` virtualizes every recognized code function, `"part"` uses only `[[procedures]]` and SDK markers, and `true`/`1` is an alias for `"full"`. |
+| `mutation` | Boolean or `0`/`1`. In `full` mode it combines with virtualization as Ultra; in `part`/procedure mode it changes selected functions to mutation. |
 | `vm_options` | Low-level VM option mask; leave at `0` unless your profile requires it. |
 | `compression` | `lzma` or `zstd`; default: `lzma`. Managed inputs currently support LZMA only. |
-| `packer_cipher` | `none`, `fast`, `balance`, or `secure`; default: `fast`. |
-| `packer_cipher_layer2` | Boolean second-pass switch; default: `false`. |
+| `use_xor` | `none`, `fast`, `balance`, or `secure`; default: `fast`. Configuration-only packed-payload transform. |
+| `use_xor_layer2` | Boolean second-pass switch; default: `false`. Configuration-only. |
 | `cpu_hash_slots` | User-mode CPU-hash slot count, from `1` to `32`; default: `32`. |
 | `vm_entry_compatibility_buffer` | Native VM-entry padding instruction count. `0` disables it; values above `4096` are clamped. |
 | `vm_section` | VM section-name setting. Native generated sections normally use `.fdata`, `.sdata`, `.tdata`, then `.zdata`, `.ydata`, and so on; managed output uses a separate naming path. |
@@ -125,20 +146,9 @@ anti-VM switch and has no effect on a function that has no generated VM entry.
 Generated native section-name collisions produce a warning and use a suffixed
 name instead of silently reusing an existing name.
 
-Some commonly used `options` bits are:
-
-| Bit | Feature |
-| --- | --- |
-| `0x00000100` | Packing |
-| `0x00000200` | Import protection |
-| `0x00000400` | Debugger checks |
-| `0x00001000` | Memory protection |
-| `0x00010000` | Resource protection |
-
-Combine bits by adding their distinct values: `options = 0x300` enables packing
-and import protection. These flags do not select every function for
-virtualization. Configure functions explicitly through `[[procedures]]`,
-supported source markers, or the [Lua function API](LUA.md#selecting-functions).
+`virtualization = "part"` does not invent a function list. Add `[[procedures]]`
+entries or use the input's `ProtectBegin...ProtectEnd` markers. In `full` mode,
+those markers and per-function modes are deliberately overridden.
 
 ### Functions and embedded scripts
 
@@ -181,7 +191,7 @@ callback timing and complete examples.
 | Section | Keys |
 | --- | --- |
 | `[project]` | `input`, `output`, `watermark`, `hwid`, `license_data` |
-| `[protection]` | `options`, `vm_options`, `vm_section`, `vm_entry_compatibility_buffer`, `cpu_hash_slots`, `compression`, `packer_cipher`, `packer_cipher_layer2` |
+| `[protection]` | `pack`, `anti_debug`, `anti_vm`, `import_protection`, `memory_protection`, `resource_protection`, `strip_fixups`, `strip_debug_info`, `virtualization`, `mutation`, `vm_options`, `vm_section`, `vm_entry_compatibility_buffer`, `cpu_hash_slots`, `compression`, `use_xor`, `use_xor_layer2` |
 | `[[messages]]` | `id`, `text` |
 | `[[folders]]` | `name`, `parent`, `position` |
 | `[[procedures]]` | `name` or `address`, `architecture`, `mode`, `enable`, `options`, `folder`, `index`, `break_offset`, `ext_offsets` |
@@ -193,9 +203,9 @@ callback timing and complete examples.
 | `[license_manager]` | `product_code`, `algorithm`, `bits`, `public_exp`, `private_exp`, `modulus`, `activation_server`, `black_list` |
 | `[[license_manager.licenses]]` | `date`, `customer_name`, `customer_email`, `order_ref`, `serial_number`, `blocked`, `comments` |
 
-Legacy `check_kernel_debugger`, `compression_mode`, and `vm_executor_count`
+Legacy `options`, `packer_cipher`, `packer_cipher_layer2`, `check_kernel_debugger`, `compression_mode`, and `vm_executor_count`
 protection keys are still recognized for compatibility. They do not add kernel
-driver support.
+driver support. New profiles should use the named boolean settings above.
 
 Boolean fields accept `true` or `false`. Option masks, offsets, and indexes are
 nonnegative 32-bit integers. Addresses accept nonnegative TOML integers; quote
@@ -210,10 +220,10 @@ With packing enabled, native PE regions and resources use the selected
 compressor. Managed inputs currently support LZMA only. Selecting compression
 or a cipher does not enable packing, function virtualization, or other flags.
 
-For a native executable, override the packing profile with:
+For a native executable, edit the packing profile before running:
 
 ```powershell
-.\my-vmp.exe .\input.exe .\protected.exe -pf .\pack.cfg --compression zstd --packer-cipher balance
+.\my-vmp.exe -pf .\pack.cfg
 ```
 
 | Cipher profile | Work per 16-byte mask |
@@ -233,10 +243,10 @@ The optional second pass defaults to off and is ignored when the cipher is
 `none`. Enable it for a build with:
 
 ```powershell
-.\my-vmp.exe .\input.exe .\protected.exe -pf .\pack.cfg --packer-cipher secure --packer-cipher-layer2
+.\my-vmp.exe -pf .\pack.cfg
 ```
 
-Use `--no-packer-cipher-layer2` to override a profile that enables it. More rounds
+Set `use_xor_layer2 = false` to disable a profile that enables it. More rounds
 or a second pass add startup work; measure your application instead of assuming
 a fixed performance cost. These settings apply to packed payloads, not every
 existing string, resource, licensing, or VM-bytecode transform. They do not

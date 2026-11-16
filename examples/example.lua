@@ -3,10 +3,6 @@ local core = myvmp.core()
 local input = assert(core:inputFile(), "An input executable is required")
 local compiled_architectures = 0
 
--- Change global project settings at top level, before compilation starts.
--- Preserve existing flags when enabling packing.
-core:setOptions(core:options() | ProjectOption.Pack)
-
 print("Input: " .. core:inputFileName())
 print("Output: " .. core:outputFileName())
 print("Format: " .. input:format())
