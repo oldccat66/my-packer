@@ -66,6 +66,7 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Read source build profile
+        id: build_info
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -166,7 +167,7 @@ jobs:
           RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
           SOURCE_REF: main
           PRERELEASE_INPUT: ${{ inputs.prerelease }}
-          BUILD_MESSAGE: ${{ steps.source.outputs.message }}
+          BUILD_MESSAGE: ${{ steps.build_info.outputs.message }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
@@ -189,6 +190,9 @@ jobs:
           }
 
           $releaseDir = Join-Path $env:GITHUB_WORKSPACE 'release'
+          if ([string]::IsNullOrWhiteSpace($env:BUILD_MESSAGE)) {
+            throw 'Cannot package the release: CI_BUILDINFO MSG did not reach the packaging step.'
+          }
           New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
           $packageDir = Join-Path $releaseDir 'package'
           New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
@@ -235,11 +239,14 @@ jobs:
           RELEASE_TAG: ${{ steps.package.outputs.tag }}
           ZIP_PATH: ${{ steps.package.outputs.zip }}
           CHECKSUM_PATH: ${{ steps.package.outputs.checksums }}
-          RELEASE_MESSAGE: ${{ steps.source.outputs.message }}
+          RELEASE_MESSAGE: ${{ steps.build_info.outputs.message }}
           PRERELEASE_INPUT: ${{ inputs.prerelease }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:RELEASE_MESSAGE)) {
+            throw 'Cannot publish the release: CI_BUILDINFO MSG did not reach the release step.'
+          }
           $releaseArgs = @('release', 'create', $env:RELEASE_TAG, $env:ZIP_PATH, $env:CHECKSUM_PATH, '--title', "my-vmp $env:RELEASE_TAG", '--notes', $env:RELEASE_MESSAGE)
           if ($env:PRERELEASE_INPUT -eq 'true') {
             $releaseArgs += '--prerelease'
